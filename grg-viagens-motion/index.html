@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>GRG Viagens — Motion</title>
+<style>
+  @font-face { font-family: 'Montserrat'; font-weight: 100 900; src: url(assets/fonts/Montserrat-900.woff2) format('woff2'); }
+  @font-face { font-family: 'Anton'; font-weight: 400; src: url(assets/fonts/Anton-400.woff2) format('woff2'); }
+  @font-face { font-family: 'Space Mono'; font-weight: 700; src: url(assets/fonts/SpaceMono-700.woff2) format('woff2'); }
+  html, body { margin: 0; background: #020b24; }
+  body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  canvas { display: block; height: 100vh; width: auto; max-width: 100vw; }
+  body.capture canvas { height: 1920px; width: 1080px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+/* GRG Viagens — vertical motion graphics (1080x1920, 30fps, 22s).
+   Everything is a pure function of time t, so frames render deterministically
+   for capture (render.js) and also play live in the browser for preview. */
+const W = 1080, H = 1920, FPS = 30, DUR = 22;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const CAPTURE = location.search.includes('capture');
+if (CAPTURE) document.body.classList.add('capture');
+
+const C = {
+  navy: '#031236', navy2: '#0a2f7a', blue: '#0b4db3', royal: '#1565d8',
+  cyan: '#22e6f5', white: '#ffffff', yellow: '#ffd23f', paper: '#f5eedc',
+};
+
+// ---------- utils ----------
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, k) => a + (b - a) * k;
+const eOutCubic = k => 1 - Math.pow(1 - k, 3);
+const eInCubic = k => k * k * k;
+const eInOut = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const eOutExpo = k => k >= 1 ? 1 : 1 - Math.pow(2, -10 * k);
+const eOutBack = (k, s = 1.70158) => 1 + (s + 1) * Math.pow(k - 1, 3) + s * Math.pow(k - 1, 2);
+const eOutElastic = k => k === 0 ? 0 : k === 1 ? 1 : Math.pow(2, -10 * k) * Math.sin((k * 10 - .75) * (2 * Math.PI / 3)) + 1;
+function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const hash = (a, b = 0) => rng((a * 73856093) ^ (b * 19349663))();
+
+function rrect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+// Text with pop-in transform. o: {size, font, weight, color, align, alpha, scale, rot, dy, stroke, glow, spacing}
+function text(str, x, y, o = {}) {
+  const a = o.alpha ?? 1; if (a <= 0) return;
+  ctx.save();
+  ctx.globalAlpha *= a;
+  ctx.translate(x, y + (o.dy || 0));
+  if (o.rot) ctx.rotate(o.rot);
+  const s = o.scale ?? 1; ctx.scale(s * (o.sx ?? 1), s * (o.sy ?? 1));
+  ctx.font = `${o.weight || 900} ${o.size || 100}px ${o.font || 'Montserrat'}`;
+  ctx.textAlign = o.align || 'center'; ctx.textBaseline = 'middle';
+  if (o.spacing) ctx.letterSpacing = o.spacing + 'px';
+  if (o.glow) { ctx.shadowColor = o.glow; ctx.shadowBlur = o.glowBlur || 40; }
+  if (o.shadow) { ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 0; ctx.shadowOffsetY = o.shadow; }
+  if (o.stroke) { ctx.lineWidth = o.strokeW || 12; ctx.strokeStyle = o.stroke; ctx.lineJoin = 'round'; ctx.strokeText(str, 0, 0); }
+  ctx.fillStyle = o.color || C.white; ctx.fillText(str, 0, 0);
+  ctx.restore();
+}
+// Word pop: returns style for appearance starting at t0
+function pop(t, t0, d = .28) {
+  const k = prog(t, t0, t0 + d);
+  return { alpha: clamp(k * 3), scale: k <= 0 ? .4 : eOutBack(k, 2.2) * .999 + .001, dy: (1 - eOutCubic(k)) * 50 };
+}
+
+// Airplane (top view, pointing +x). size = nose-to-tail length.
+function plane(x, y, size, ang, color = C.white) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.scale(size / 100, size / 100);
+  ctx.fillStyle = color; ctx.beginPath();
+  ctx.moveTo(50, 0); ctx.bezierCurveTo(50, -6, 42, -7, 34, -7);
+  ctx.lineTo(8, -7); ctx.lineTo(-12, -46); ctx.lineTo(-22, -46); ctx.lineTo(-8, -7);
+  ctx.lineTo(-34, -7); ctx.lineTo(-44, -22); ctx.lineTo(-51, -22); ctx.lineTo(-45, 0);
+  ctx.lineTo(-51, 22); ctx.lineTo(-44, 22); ctx.lineTo(-34, 7); ctx.lineTo(-8, 7);
+  ctx.lineTo(-22, 46); ctx.lineTo(-12, 46); ctx.lineTo(8, 7); ctx.lineTo(34, 7);
+  ctx.bezierCurveTo(42, 7, 50, 6, 50, 0); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ---------- camera shake ----------
+const IMPACTS = [[1.5, 26], [6.5, 12], [7.5, 9], [8.0, 9], [8.5, 9], [9.0, 9], [9.5, 9], [10.0, 12], [15.0, 30]];
+function shake(t) {
+  let x = 0, y = 0;
+  for (const [ti, s] of IMPACTS) {
+    if (t < ti) continue; const d = t - ti; const k = s * Math.exp(-d * 11);
+    x += k * Math.sin(d * 71 + ti); y += k * Math.cos(d * 59 + ti * 2);
+  }
+  return [x, y];
+}
+
+// ---------- backgrounds ----------
+function bgNavy(t, c1 = C.navy2, c2 = C.navy) {
+  const g = ctx.createRadialGradient(W / 2, H * .42, 50, W / 2, H * .5, H * .8);
+  g.addColorStop(0, c1); g.addColorStop(1, c2);
+  ctx.fillStyle = g; ctx.fillRect(-60, -60, W + 120, H + 120);
+  // drifting dot grid
+  ctx.fillStyle = 'rgba(255,255,255,.07)';
+  const off = (t * 30) % 60;
+  for (let y = -60; y < H + 60; y += 60) for (let x = -60; x < W + 60; x += 60) {
+    ctx.beginPath(); ctx.arc(x + off, y + off * .5, 2.2, 0, 7); ctx.fill();
+  }
+  // floating particles
+  for (let i = 0; i < 40; i++) {
+    const r = rng(i + 11); const sx = r() * W, sp = 20 + r() * 60, sz = 1 + r() * 3.5;
+    const yy = ((r() * H - t * sp) % H + H) % H; const tw = .3 + .7 * Math.abs(Math.sin(t * 2 + i));
+    ctx.fillStyle = `rgba(34,230,245,${.35 * tw})`; ctx.beginPath(); ctx.arc(sx + Math.sin(t + i) * 15, yy, sz, 0, 7); ctx.fill();
+  }
+}
+function vignette(a = .55) {
+  const g = ctx.createRadialGradient(W / 2, H / 2, H * .3, W / 2, H / 2, H * .75);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, `rgba(0,0,0,${a})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+function speedLines(t, cx, cy, t0, n = 36, col = 'rgba(34,230,245,') {
+  const k = prog(t, t0, t0 + .6); if (k <= 0 || k >= 1) return;
+  ctx.save(); ctx.lineCap = 'round';
+  for (let i = 0; i < n; i++) {
+    const r = rng(i * 7 + 3); const a = i / n * Math.PI * 2 + r() * .2;
+    const r0 = 150 + eOutCubic(k) * 700 * (.6 + r() * .6), len = 80 + r() * 160;
+    ctx.strokeStyle = col + (1 - k) * .9 + ')'; ctx.lineWidth = 3 + r() * 6;
+    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
+    ctx.lineTo(cx + Math.cos(a) * (r0 + len), cy + Math.sin(a) * (r0 + len)); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ============ SCENE 1 — HOOK (0 – 2.5) ============
+function scene1(t) {
+  bgNavy(t);
+  const words = [['SE VOCÊ', 600, 0.02], ['PUDESSE', 740, 0.5], ['EMBARCAR', 880, 1.0]];
+  for (const [w, y, t0] of words) text(w, W / 2, y, { size: 128, ...pop(t, t0), shadow: 8 });
+  // HOJE slam
+  if (t >= 1.42) {
+    const k = prog(t, 1.42, 1.62);
+    const s = lerp(3.2, 1, eOutExpo(k)) * (1 + .04 * Math.sin(t * 9));
+    speedLines(t, W / 2, 1250, 1.5);
+    text('HOJE', W / 2, 1250, { font: 'Anton', weight: 400, size: 460, color: C.cyan, scale: s, alpha: clamp(k * 4), glow: 'rgba(34,230,245,.7)', glowBlur: 60 });
+    text('HOJE', W / 2, 1250, { font: 'Anton', weight: 400, size: 460, color: C.cyan, scale: s, alpha: clamp(k * 4) });
+    // plane buzzing across behind the word
+    const pk = prog(t, 1.55, 2.4);
+    if (pk > 0 && pk < 1) {
+      const px = lerp(-150, W + 150, eInOut(pk)), py = 1520 - Math.sin(pk * Math.PI) * 120;
+      ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.setLineDash([18, 16]); ctx.lineWidth = 5;
+      ctx.beginPath(); for (let q = 0; q <= pk; q += .01) { const xx = lerp(-150, W + 150, eInOut(q)), yy = 1520 - Math.sin(q * Math.PI) * 120; q === 0 ? ctx.moveTo(xx, yy) : ctx.lineTo(xx, yy); }
+      ctx.stroke(); ctx.restore();
+      plane(px, py, 120, -Math.cos(pk * Math.PI) * .35);
+    }
+  }
+  vignette();
+}
+
+// ============ SCENE 2 — DEPARTURE BOARD (2.5 – 7.0) ============
+const ROWS = [['08:40', 'PARIS'], ['10:15', 'CANCÚN'], ['11:30', 'LISBOA'], ['13:05', 'ORLANDO'], ['15:50', 'SANTIAGO'], ['18:20', 'MALDIVAS']];
+const FLAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+const CELL_W = 58, CELL_H = 86, STEP = 63, BX = 78, DX = 418, BY0 = 690, ROW_H = 112;
+function flapCell(x, y, ch, t, settle, seed) {
+  rrect(x, y, CELL_W, CELL_H, 8); ctx.fillStyle = '#161c2b'; ctx.fill();
+  let shown = ch, flipping = t < settle;
+  if (flipping) shown = FLAP[Math.floor(hash(seed, Math.floor(t * 22)) * FLAP.length)];
+  if (t < settle - 1.6) shown = ' ';
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, CELL_W, CELL_H); ctx.clip();
+  ctx.fillStyle = '#f4f6ff'; ctx.font = '700 58px "Space Mono"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (flipping && shown !== ' ') { const f = (t * 22) % 1; ctx.translate(x + CELL_W / 2, y + CELL_H / 2); ctx.scale(1, .55 + .45 * f); ctx.fillText(shown, 0, 4); }
+  else ctx.fillText(shown, x + CELL_W / 2, y + CELL_H / 2 + 4);
+  ctx.restore();
+  ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(x, y + CELL_H / 2 - 1.5, CELL_W, 3);
+  ctx.fillStyle = 'rgba(255,255,255,.06)'; ctx.fillRect(x, y, CELL_W, CELL_H / 2 - 2);
+}
+function selRow(t) { const k = eOutCubic(prog(t, 5.1, 6.4)); return Math.floor(k * 17 + .0001) % 6; }
+function scene2(t) {
+  bgNavy(t);
+  text('PARA ONDE', W / 2, 300, { size: 112, ...pop(t, 2.55), shadow: 8 });
+  text('VOCÊ IRIA?', W / 2, 425, { size: 112, color: C.cyan, ...pop(t, 2.75), shadow: 8 });
+  // board panel
+  const pk = eOutBack(prog(t, 2.55, 2.95), 1.3);
+  ctx.save(); ctx.translate(W / 2, 1060); ctx.scale(pk, pk); ctx.translate(-W / 2, -1060);
+  rrect(40, 540, 1000, 850, 34); ctx.fillStyle = '#0a0e18'; ctx.fill();
+  ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(34,230,245,.35)'; ctx.stroke();
+  plane(98, 604, 58, -Math.PI / 4, C.yellow);
+  text('PARTIDAS', 140, 606, { font: 'Space Mono', weight: 700, size: 44, color: C.yellow, align: 'left', spacing: 4 });
+  const blink = Math.floor(t * 2) % 2 === 0;
+  text('● AO VIVO', 1000, 606, { font: 'Space Mono', weight: 700, size: 30, color: blink ? '#ff4d5e' : '#7a2330', align: 'right' });
+  text('HORA', BX, 668, { font: 'Space Mono', weight: 700, size: 22, color: '#8792b3', align: 'left' });
+  text('DESTINO', DX, 668, { font: 'Space Mono', weight: 700, size: 22, color: '#8792b3', align: 'left' });
+  const sel = selRow(t), chosen = t >= 6.4;
+  for (let r = 0; r < 6; r++) {
+    const y = BY0 + r * ROW_H, rs = 2.75 + r * .22;
+    const dim = chosen && r !== 5;
+    ctx.save(); if (dim) ctx.globalAlpha = lerp(1, .3, prog(t, 6.4, 6.6));
+    const [hr, dest] = ROWS[r];
+    for (let c = 0; c < 5; c++) flapCell(BX + c * STEP, y, hr[c], t, rs + .35 + c * .05, r * 100 + c);
+    const d = dest.padEnd(9, ' ');
+    for (let c = 0; c < 9; c++) flapCell(DX + c * STEP, y, d[c], t, rs + .6 + c * .07, r * 100 + 50 + c);
+    ctx.restore();
+  }
+  // slot-machine selector
+  if (t > 5.1) {
+    const y = BY0 + sel * ROW_H;
+    const glow = chosen ? .6 + .4 * Math.sin(t * 14) : 1;
+    ctx.save(); ctx.lineWidth = 7; ctx.strokeStyle = C.cyan; ctx.shadowColor = C.cyan; ctx.shadowBlur = 30 * glow;
+    rrect(60, y - 10, 960, CELL_H + 20, 16); ctx.stroke(); ctx.restore();
+  }
+  ctx.restore();
+  // stamp on chosen row
+  if (t >= 6.38) {
+    const k = prog(t, 6.38, 6.5), s = lerp(2.2, 1, eInCubic(k));
+    ctx.save(); ctx.globalAlpha = clamp(k * 3); ctx.translate(640, BY0 + 5 * ROW_H + 150); ctx.rotate(-.12); ctx.scale(s, s);
+    rrect(-300, -52, 600, 104, 14); ctx.lineWidth = 8; ctx.strokeStyle = '#ff3b4f'; ctx.stroke();
+    text('EMBARQUE IMEDIATO', 0, 4, { size: 52, color: '#ff3b4f' });
+    ctx.restore();
+  }
+  vignette();
+}
+
+// ============ SCENE 3 — PASSPORT STAMPS (7.0 – 10.9) ============
+const STAMPS = [
+  { name: 'PARIS', t: 7.5, x: 300, y: 650, rot: -.2, col: '#d7263d', shape: 'circle' },
+  { name: 'CANCÚN', t: 8.0, x: 770, y: 720, rot: .14, col: '#1b4fd8', shape: 'rect' },
+  { name: 'LISBOA', t: 8.5, x: 320, y: 990, rot: .1, col: '#1f8a4c', shape: 'oval' },
+  { name: 'ORLANDO', t: 9.0, x: 770, y: 1060, rot: -.12, col: '#7b2cbf', shape: 'rect' },
+  { name: 'TÓQUIO', t: 9.5, x: 310, y: 1320, rot: .17, col: '#d7263d', shape: 'circle' },
+  { name: 'RIO', t: 10.0, x: 770, y: 1360, rot: -.16, col: '#f26b1d', shape: 'double' },
+];
+const stampCache = {};
+function stampCanvas(s, i) {
+  if (stampCache[i]) return stampCache[i];
+  const c = document.createElement('canvas'); c.width = 460; c.height = 360; const g = c.getContext('2d');
+  g.translate(230, 180); g.strokeStyle = g.fillStyle = s.col; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const ring = (fn) => { g.beginPath(); fn(); g.stroke(); };
+  if (s.shape === 'circle') {
+    g.lineWidth = 10; ring(() => g.arc(0, 0, 160, 0, 7)); g.lineWidth = 4; ring(() => g.arc(0, 0, 140, 0, 7));
+    g.font = '900 20px Montserrat'; g.letterSpacing = '6px';
+    const lbl = '★ CHEGADA ★ ARRIVAL ★ CHEGADA ★ ARRIVAL ';
+    for (let k = 0; k < lbl.length; k++) { g.save(); g.rotate(k / lbl.length * Math.PI * 2); g.fillText(lbl[k], 0, -120); g.restore(); }
+    g.letterSpacing = '0px'; g.font = '900 64px Montserrat'; g.fillText(s.name, 0, 10);
+    g.font = '700 26px "Space Mono"'; g.fillText('25 SET 2026', 0, 62);
+  } else if (s.shape === 'oval') {
+    g.lineWidth = 10; ring(() => g.ellipse(0, 0, 200, 130, 0, 0, 7)); g.lineWidth = 4; ring(() => g.ellipse(0, 0, 180, 112, 0, 0, 7));
+    g.font = '900 72px Montserrat'; g.fillText(s.name, 0, 0);
+    g.font = '700 26px "Space Mono"'; g.fillText('✈ ENTRADA · 2026', 0, 62); g.fillText('PORTUGAL', 0, -60);
+  } else {
+    g.lineWidth = 10; g.strokeRect(-200, -120, 400, 240);
+    if (s.shape === 'double') { g.lineWidth = 4; g.strokeRect(-182, -102, 364, 204); }
+    g.font = '700 26px "Space Mono"'; g.fillText('VISTO · VISA', 0, -72);
+    g.font = '900 ' + (s.name.length > 6 ? 70 : 90) + 'px Montserrat'; g.fillText(s.name, 0, 4);
+    g.fillRect(-150, 52, 300, 5); g.fillText('2026 ✈', 0, 84);
+  }
+  // ink texture: knock out random specks
+  g.setTransform(1, 0, 0, 1, 0, 0); g.globalCompositeOperation = 'destination-out'; const r = rng(i + 99);
+  for (let k = 0; k < 900; k++) { g.globalAlpha = .3 + r() * .7; g.beginPath(); g.arc(r() * 460, r() * 360, r() * 3.2, 0, 7); g.fill(); }
+  return (stampCache[i] = c);
+}
+function scene3(t) {
+  ctx.fillStyle = C.paper; ctx.fillRect(-60, -60, W + 120, H + 120);
+  // guilloche security pattern
+  ctx.save(); ctx.lineWidth = 2;
+  for (let k = 0; k < 26; k++) {
+    ctx.strokeStyle = k % 2 ? 'rgba(20,110,140,.10)' : 'rgba(11,77,179,.08)'; ctx.beginPath();
+    for (let x = -20; x <= W + 20; x += 12) { const y = 80 + k * 72 + Math.sin(x / 70 + k * .7 + t * .6) * 24 + Math.sin(x / 23 + k) * 6; x === -20 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+    ctx.stroke();
+  }
+  ctx.restore();
+  ctx.save(); ctx.globalAlpha = .06; plane(W / 2, 1050, 900, -.5, C.blue); ctx.restore();
+  text('PASSAPORTE · PASSPORT', W / 2, 1640, { font: 'Space Mono', weight: 700, size: 30, color: 'rgba(3,18,54,.35)', spacing: 6 });
+  // title with marker highlight
+  text('COLECIONE', W / 2, 290, { size: 124, color: C.navy, ...pop(t, 7.05) });
+  const hk = eOutCubic(prog(t, 7.25, 7.55));
+  if (hk > 0) { ctx.save(); ctx.fillStyle = C.cyan; ctx.translate(W / 2, 425); ctx.rotate(-.02); ctx.fillRect(-400, -62, 800 * hk, 124); ctx.restore(); }
+  text('DESTINOS.', W / 2, 425, { size: 124, color: C.navy, ...pop(t, 7.2) });
+  // stamps
+  STAMPS.forEach((s, i) => {
+    if (t < s.t - .12) return;
+    const k = prog(t, s.t - .12, s.t), sc = t < s.t ? lerp(1.9, 1, eInCubic(k)) : 1 + .05 * Math.exp(-(t - s.t) * 14) * Math.sin((t - s.t) * 40);
+    ctx.save(); ctx.globalAlpha = t < s.t ? k * .5 : .9; ctx.translate(s.x, s.y); ctx.rotate(s.rot); ctx.scale(sc * .88, sc * .88);
+    ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(stampCanvas(s, i), -230, -180); ctx.restore();
+    // ink splash ring on impact
+    const ik = prog(t, s.t, s.t + .3); if (ik > 0 && ik < 1) { ctx.save(); ctx.strokeStyle = s.col; ctx.globalAlpha = (1 - ik) * .5; ctx.lineWidth = 6; ctx.beginPath(); ctx.arc(s.x, s.y, 180 + ik * 120, 0, 7); ctx.stroke(); ctx.restore(); }
+  });
+  const n = STAMPS.filter(s => t >= s.t).length;
+  if (t > 7.4) {
+    rrect(W / 2 - 330, 1545, 660, 76, 38); ctx.fillStyle = C.navy; ctx.fill();
+    text(`DESTINOS: ${String(n).padStart(2, '0')} / ∞`, W / 2, 1585, { font: 'Space Mono', weight: 700, size: 40, color: C.cyan, scale: 1 + .12 * Math.exp(-(t - (STAMPS[n - 1]?.t ?? 0)) * 10) });
+  }
+}
+
+// ============ SCENE 4 — VIVA HISTÓRIAS + SERVICES (11.0 – 15.0) ============
+function polaroidArt(kind, x, y, s) {
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, s, s); ctx.clip();
+  if (kind === 0) { // beach sunset
+    let g = ctx.createLinearGradient(0, y, 0, y + s); g.addColorStop(0, '#ff7e5f'); g.addColorStop(.55, '#feb47b'); g.addColorStop(.56, '#1c8fd6'); g.addColorStop(1, '#0a5fa8');
+    ctx.fillStyle = g; ctx.fillRect(x, y, s, s);
+    ctx.fillStyle = '#ffe66d'; ctx.beginPath(); ctx.arc(x + s * .5, y + s * .52, s * .16, Math.PI, 0); ctx.fill();
+    ctx.fillStyle = 'rgba(255,230,109,.6)'; for (let i = 0; i < 5; i++) ctx.fillRect(x + s * (.36 + i * .02), y + s * (.6 + i * .06), s * (.28 - i * .04), 5);
+    ctx.fillStyle = '#f2d49b'; ctx.beginPath(); ctx.ellipse(x + s * .15, y + s * 1.02, s * .55, s * .2, 0, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#3b2a1a'; ctx.lineWidth = 9; ctx.beginPath(); ctx.moveTo(x + s * .12, y + s); ctx.quadraticCurveTo(x + s * .16, y + s * .6, x + s * .26, y + s * .36); ctx.stroke();
+    ctx.fillStyle = '#1f6b3a'; for (let i = 0; i < 5; i++) { ctx.save(); ctx.translate(x + s * .26, y + s * .36); ctx.rotate(-2.6 + i * .75); ctx.beginPath(); ctx.ellipse(s * .12, 0, s * .13, s * .035, 0, 0, 7); ctx.fill(); ctx.restore(); }
+  } else if (kind === 1) { // snowy mountains
+    let g = ctx.createLinearGradient(0, y, 0, y + s); g.addColorStop(0, '#5ec8ff'); g.addColorStop(1, '#d9f3ff'); ctx.fillStyle = g; ctx.fillRect(x, y, s, s);
+    const m = (cx, h, w, c) => { ctx.fillStyle = c; ctx.beginPath(); ctx.moveTo(x + cx - w, y + s); ctx.lineTo(x + cx, y + s - h); ctx.lineTo(x + cx + w, y + s); ctx.fill();
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(x + cx, y + s - h); ctx.lineTo(x + cx - w * .28, y + s - h * .72); ctx.lineTo(x + cx - w * .1, y + s - h * .78); ctx.lineTo(x + cx + w * .05, y + s - h * .7); ctx.lineTo(x + cx + w * .28, y + s - h * .72); ctx.fill(); };
+    m(s * .3, s * .7, s * .42, '#3d5a80'); m(s * .75, s * .55, s * .4, '#29425f');
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(x + s * .7, y + s * .2, s * .12, s * .05, 0, 0, 7); ctx.fill();
+  } else { // city night
+    let g = ctx.createLinearGradient(0, y, 0, y + s); g.addColorStop(0, '#0b1446'); g.addColorStop(1, '#5b2a86'); ctx.fillStyle = g; ctx.fillRect(x, y, s, s);
+    ctx.fillStyle = '#fff5c2'; ctx.beginPath(); ctx.arc(x + s * .78, y + s * .2, s * .07, 0, 7); ctx.fill();
+    const r = rng(5); let bx = x;
+    while (bx < x + s) { const bw = s * (.08 + r() * .1), bh = s * (.25 + r() * .45); ctx.fillStyle = '#10163a'; ctx.fillRect(bx, y + s - bh, bw, bh);
+      ctx.fillStyle = '#ffd23f'; for (let wy = y + s - bh + 10; wy < y + s - 8; wy += 16) for (let wx = bx + 6; wx < bx + bw - 6; wx += 12) if (r() > .55) ctx.fillRect(wx, wy, 5, 7);
+      bx += bw + 3; }
+  }
+  ctx.restore();
+}
+function polaroid(kind, cx, cy, rot, cap, t, t0) {
+  const k = prog(t, t0, t0 + .45); if (k <= 0) return;
+  const out = prog(t, 12.3, 12.6);
+  const e = eOutBack(k, 1.4);
+  ctx.save();
+  ctx.translate(cx + (1 - e) * (cx - W / 2) * .8, cy + (1 - e) * 900 + eInCubic(out) * 1400); ctx.rotate(rot * e + (1 - e) * .6);
+  ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 18;
+  ctx.fillStyle = '#fdfdf8'; ctx.fillRect(-190, -225, 380, 450); ctx.shadowColor = 'transparent';
+  polaroidArt(kind, -170, -205, 340);
+  text(cap, 0, 180, { size: 34, weight: 800, color: '#1a1f36' });
+  ctx.restore();
+}
+const SERVICES = [['✈️', 'Passagens aéreas'], ['🏨', 'Hotéis e resorts'], ['🧳', 'Pacotes completos'], ['💬', 'Cotação personalizada']];
+const SVC_T = [12.5, 12.875, 13.25, 13.625];
+function scene4(t) {
+  bgNavy(t);
+  text('VIVA', W / 2, 290, { size: 150, ...pop(t, 11.02), shadow: 8 });
+  text('HISTÓRIAS.', W / 2, 440, { size: 150, color: C.cyan, ...pop(t, 11.2), shadow: 8, glow: 'rgba(34,230,245,.45)' });
+  polaroid(1, 280, 1010, -.16, 'neve em Bariloche', t, 11.5);
+  polaroid(2, 800, 1060, .13, 'noite em NY', t, 11.75);
+  polaroid(0, 540, 960, .03, 'pôr do sol no Caribe', t, 12.0);
+  if (t > 12.35) text('A GRG CUIDA DE TUDO:', W / 2, 640, { size: 46, weight: 800, color: '#b9c8ff', spacing: 3, ...pop(t, 12.35) });
+  const riser = prog(t, 14.0, 15.0);
+  SERVICES.forEach(([ico, lbl], i) => {
+    const t0 = SVC_T[i], k = prog(t, t0, t0 + .32); if (k <= 0) return;
+    const e = eOutBack(k, 1.6), y = 730 + i * 185;
+    ctx.save(); ctx.translate(W / 2 + (1 - e) * 700 * (i % 2 ? 1 : -1), y + 75);
+    const pulse = 1 + riser * .04 * Math.sin(t * 40 + i);
+    ctx.scale(pulse, pulse);
+    rrect(-450, -75, 900, 150, 32); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.stroke();
+    ctx.fillStyle = 'rgba(34,230,245,.18)'; ctx.beginPath(); ctx.arc(-365, 0, 52, 0, 7); ctx.fill();
+    text(ico, -365, 4, { size: 58, font: '"Noto Color Emoji"', weight: 400 });
+    text(lbl, -285, 2, { size: 47, weight: 800, align: 'left' });
+    const ck = prog(t, t0 + .15, t0 + .4);
+    if (ck > 0) {
+      ctx.save(); ctx.translate(375, 0); ctx.scale(eOutBack(ck, 3), eOutBack(ck, 3));
+      ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.arc(0, 0, 40, 0, 7); ctx.fill();
+      ctx.strokeStyle = C.navy; ctx.lineWidth = 10; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(-17, 1); ctx.lineTo(-5, 14); ctx.lineTo(18, -12); ctx.stroke(); ctx.restore();
+    }
+    ctx.restore();
+  });
+  // iris into logo blue
+  if (riser > 0) {
+    const rr = eInCubic(prog(t, 14.55, 15.0)) * 1250;
+    ctx.save(); ctx.fillStyle = 'rgba(255,255,255,' + riser * .12 + ')'; ctx.fillRect(0, 0, W, H);
+    if (rr > 0) { ctx.fillStyle = C.blue; ctx.shadowColor = C.cyan; ctx.shadowBlur = 60; ctx.beginPath(); ctx.arc(W / 2, 820, rr, 0, 7); ctx.fill(); ctx.lineWidth = 14; ctx.strokeStyle = C.cyan; ctx.stroke(); } ctx.restore();
+  }
+  vignette(.45);
+}
+
+// ============ SCENE 5/6 — LOGO REVEAL + CTA (15.0 – 22.0) ============
+const logo = new Image(); logo.src = 'assets/logo.png';
+const LOGO_R = 548; // radius of the badge (incl. outer ring) in the source image
+function scene5(t) {
+  const g = ctx.createRadialGradient(W / 2, 820, 60, W / 2, 900, H * .8);
+  g.addColorStop(0, C.royal); g.addColorStop(.55, C.blue); g.addColorStop(1, '#021a4a');
+  ctx.fillStyle = g; ctx.fillRect(-60, -60, W + 120, H + 120);
+  // rotating light rays
+  ctx.save(); ctx.translate(W / 2, 820); ctx.rotate(t * .25);
+  for (let i = 0; i < 18; i++) { ctx.rotate(Math.PI * 2 / 18); ctx.fillStyle = 'rgba(255,255,255,.045)'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(1500, -130); ctx.lineTo(1500, 130); ctx.fill(); }
+  ctx.restore();
+  // sparkles
+  for (let i = 0; i < 50; i++) { const r = rng(i + 500); const a = r() * 7, d = 380 + r() * 700 + ((t - 15) * 40 * r()) ;
+    const tw = Math.max(0, Math.sin(t * (2 + r() * 3) + i)); ctx.fillStyle = `rgba(255,255,255,${tw * .8})`;
+    ctx.beginPath(); ctx.arc(W / 2 + Math.cos(a) * d, 820 + Math.sin(a) * d, 1.5 + r() * 3, 0, 7); ctx.fill(); }
+  // shockwave
+  const sk = prog(t, 15.0, 15.7);
+  if (sk > 0 && sk < 1) { ctx.save(); ctx.strokeStyle = `rgba(255,255,255,${1 - sk})`; ctx.lineWidth = 30 * (1 - sk) + 2; ctx.beginPath(); ctx.arc(W / 2, 820, 150 + eOutCubic(sk) * 900, 0, 7); ctx.stroke(); ctx.restore(); }
+
+  // logo transform: pops in, later moves up for CTA
+  const move = eInOut(prog(t, 18.2, 18.8));
+  const lk = prog(t, 15.0, 15.7), ls = eOutElastic(lk) * lerp(1, .62, move);
+  const lx = W / 2, ly = lerp(820, 470, move), R = 330 * ls, rot = (1 - eOutCubic(lk)) * -.6;
+  // glow pulse on beats
+  const beat = Math.exp(-((t - 15) % .5) * 8) * (t > 16 ? 1 : 0);
+  ctx.save(); ctx.fillStyle = `rgba(34,230,245,${.18 + beat * .25})`; ctx.shadowColor = C.cyan; ctx.shadowBlur = 80;
+  ctx.beginPath(); ctx.arc(lx, ly, R * (1.04 + beat * .05), 0, 7); ctx.fill(); ctx.restore();
+  if (R > 1 && logo.complete) {
+    ctx.save(); ctx.translate(lx, ly); ctx.rotate(rot);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.fill(); ctx.clip();
+    const sc = R / LOGO_R; ctx.drawImage(logo, -627 * sc, -627 * sc, 1254 * sc, 1254 * sc);
+    // shine sweep
+    const sh = prog(t, 16.2, 16.75);
+    if (sh > 0 && sh < 1) { const sx = lerp(-R * 2, R * 2, eInOut(sh)); const sg = ctx.createLinearGradient(sx - 120, 0, sx + 120, 0);
+      sg.addColorStop(0, 'rgba(255,255,255,0)'); sg.addColorStop(.5, 'rgba(255,255,255,.7)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.rotate(.4); ctx.fillStyle = sg; ctx.fillRect(-R * 3, -R * 3, R * 6, R * 6); }
+    ctx.restore();
+  }
+  // orbiting plane with cyan trail
+  const ok = prog(t, 15.25, 16.45);
+  if (ok > 0 && ok < 1) {
+    const a0 = Math.PI * .8, a = a0 + eInOut(ok) * Math.PI * 2.2, orb = 400;
+    ctx.save(); ctx.lineCap = 'round';
+    for (let j = 0; j < 30; j++) { const aa = a - j * .045; if (aa < a0) break;
+      ctx.strokeStyle = `rgba(34,230,245,${(1 - j / 30) * .9})`; ctx.lineWidth = 16 * (1 - j / 30) + 2;
+      ctx.beginPath(); ctx.arc(lx, ly, orb, aa - .05, aa); ctx.stroke(); }
+    ctx.restore();
+    plane(lx + Math.cos(a) * orb, ly + Math.sin(a) * orb, 110, a + Math.PI / 2);
+  }
+  // tagline
+  const tagOut = 1 - prog(t, 18.1, 18.4);
+  const type = (s, t0, y, col) => { const n = Math.floor(clamp((t - t0) / .03, 0, s.length)); if (n) text(s.slice(0, n), W / 2, y, { size: 66, weight: 800, color: col, alpha: tagOut }); };
+  type('Colecione destinos.', 16.55, 1270, C.white);
+  type('Viva histórias.', 17.05, 1360, C.cyan);
+
+  // ---- CTA ----
+  if (t > 18.4) {
+    text('COMENTA AQUI', W / 2, 910, { font: 'Anton', weight: 400, size: 150, ...pop(t, 18.5), shadow: 10 });
+    text('PRA ONDE VOCÊ IRIA', W / 2, 1025, { size: 58, weight: 900, color: C.cyan, ...pop(t, 18.75) });
+    const bob = Math.abs(Math.sin(t * Math.PI * 2)) * 26;
+    if (t > 19.0) text('👇', W / 2, 1130 + bob, { size: 90, font: '"Noto Color Emoji"', weight: 400, ...pop(t, 19.0) });
+    const pk = prog(t, 19.35, 19.7);
+    if (pk > 0) {
+      ctx.save(); ctx.translate(W / 2, 1290); const e = eOutBack(pk, 2); ctx.scale(e, e);
+      rrect(-380, -52, 760, 104, 52); ctx.fillStyle = '#fff'; ctx.fill();
+      text('💬', -300, 3, { size: 50, font: '"Noto Color Emoji"', weight: 400 });
+      text('Cotação grátis no direct', 30, 2, { size: 44, weight: 800, color: C.blue });
+      ctx.restore();
+    }
+    text('@grgviagens', W / 2, 1420, { size: 76, weight: 900, ...pop(t, 19.8), shadow: 6 });
+    text('grgviagens.com.br', W / 2, 1500, { size: 44, weight: 700, color: C.cyan, ...pop(t, 20.0) });
+  }
+  vignette(.4);
+}
+
+// ---------- master timeline ----------
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, W, H);
+  const [sx, sy] = shake(t);
+  ctx.save(); ctx.translate(sx, sy);
+  if (t < 2.25) scene1(t);
+  else if (t < 2.6) { // whip up: 1 -> 2
+    const k = eInOut(prog(t, 2.25, 2.6));
+    ctx.save(); ctx.translate(0, -k * H); scene1(t); ctx.restore();
+    ctx.save(); ctx.translate(0, (1 - k) * H); scene2(t); ctx.restore();
+    ctx.fillStyle = C.cyan; ctx.fillRect(0, (1 - k) * H - 14, W, 14);
+  }
+  else if (t < 7.0) { // zoom into chosen row + white flash
+    const z = eInCubic(prog(t, 6.75, 7.0));
+    ctx.save(); ctx.translate(W / 2, BY0 + 5 * ROW_H + 40); ctx.scale(1 + z * 2.5, 1 + z * 2.5); ctx.translate(-W / 2, -(BY0 + 5 * ROW_H + 40)); scene2(t); ctx.restore();
+    if (z > 0) { ctx.fillStyle = `rgba(255,255,255,${z})`; ctx.fillRect(-60, -60, W + 120, H + 120); }
+  }
+  else if (t < 10.75) {
+    scene3(t);
+    const f = 1 - prog(t, 7.0, 7.25); if (f > 0) { ctx.fillStyle = `rgba(255,255,255,${f})`; ctx.fillRect(-60, -60, W + 120, H + 120); }
+  }
+  else if (t < 11.1) { // whip left: 3 -> 4
+    const k = eInOut(prog(t, 10.75, 11.1));
+    ctx.save(); ctx.translate(-k * W, 0); scene3(t); ctx.restore();
+    ctx.save(); ctx.translate((1 - k) * W, 0); scene4(t); ctx.restore();
+    ctx.fillStyle = C.cyan; ctx.fillRect((1 - k) * W - 14, 0, 14, H);
+  }
+  else if (t < 15.0) scene4(t);
+  else scene5(t);
+  ctx.restore();
+  // hard flashes on the two big drops
+  for (const [ft, a] of [[1.5, .55], [15.0, .9]]) { const k = prog(t, ft, ft + .25); if (k > 0 && k < 1) { ctx.fillStyle = `rgba(255,255,255,${(1 - k) * a})`; ctx.fillRect(0, 0, W, H); } }
+  // loop-friendly fade out to the opening colour
+  const fo = prog(t, 21.4, 22); if (fo > 0) { ctx.fillStyle = `rgba(3,18,54,${fo})`; ctx.fillRect(0, 0, W, H); }
+}
+
+window.renderFrame = i => render(i / FPS);
+window.META = { W, H, FPS, DUR };
+window.ready = Promise.all([
+  document.fonts.load('900 100px Montserrat'), document.fonts.load('400 100px Anton'),
+  document.fonts.load('700 100px "Space Mono"'), document.fonts.load('400 100px "Noto Color Emoji"', '👇💬✈️🏨🧳'),
+  logo.decode(),
+]).then(() => { render(0); return true; });
+
+if (!CAPTURE) {
+  window.ready.then(() => {
+    const audio = new Audio('assets/music.wav'); let start = null;
+    cv.addEventListener('click', () => { start = performance.now(); audio.currentTime = 0; audio.play().catch(() => {}); });
+    const loop = now => { if (start === null) start = now; const t = ((now - start) / 1000) % DUR; render(t); requestAnimationFrame(loop); };
+    requestAnimationFrame(loop);
+  });
+}
+</script>
+</body>
+</html>
