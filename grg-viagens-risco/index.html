@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>GRG Viagens — Um Risco</title>
+<style>
+  @font-face { font-family: 'Montserrat'; font-weight: 100 900; src: url(assets/fonts/Montserrat-900.woff2) format('woff2'); }
+  @font-face { font-family: 'Instrument Serif'; font-style: normal; src: url(assets/fonts/InstrumentSerif-normal.woff2) format('woff2'); }
+  @font-face { font-family: 'Instrument Serif'; font-style: italic; src: url(assets/fonts/InstrumentSerif-italic.woff2) format('woff2'); }
+  @font-face { font-family: 'Space Mono'; font-weight: 700; src: url(assets/fonts/SpaceMono-700.woff2) format('woff2'); }
+  html, body { margin: 0; background: #e9e5dc; }
+  body { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  canvas { display: block; height: 100vh; width: auto; max-width: 100vw; }
+  body.capture canvas { height: 1920px; width: 1080px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+/* "Toda viagem começa com um risco." — one continuous hand-drawn line travels
+   mountains → sea → Paris → home, then closes into the GRG badge.
+   Pure function of time: render(t). 1080x1920, 30fps, 24s. */
+const W = 1080, H = 1920, FPS = 30, DUR = 24;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const CAPTURE = location.search.includes('capture');
+if (CAPTURE) document.body.classList.add('capture');
+
+const C = { paper: '#f6f3ec', ink: '#0b2a6b', line: '#0b4db3', cyan: '#22c7e6', gray: '#8b8f9a' };
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, k) => a + (b - a) * k;
+const eOut = k => 1 - Math.pow(1 - k, 3);
+const eInOut = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const eSine = k => -(Math.cos(Math.PI * k) - 1) / 2;
+function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// ---------- the line ----------
+const B = 1250; // world baseline
+function quad(p0, c, p1, n = 24) { const o = []; for (let i = 0; i <= n; i++) { const k = i / n, u = 1 - k; o.push([u * u * p0[0] + 2 * u * k * c[0] + k * k * p1[0], u * u * p0[1] + 2 * u * k * c[1] + k * k * p1[1]]); } return o; }
+function cubic(p0, c1, c2, p1, n = 40) { const o = []; for (let i = 0; i <= n; i++) { const k = i / n, u = 1 - k; o.push([u*u*u*p0[0] + 3*u*u*k*c1[0] + 3*u*k*k*c2[0] + k*k*k*p1[0], u*u*u*p0[1] + 3*u*u*k*c1[1] + 3*u*k*k*c2[1] + k*k*k*p1[1]]); } return o; }
+function waves(x0, x1, amp = 26, per = 140) { const o = []; for (let x = x0; x <= x1; x += 6) o.push([x, B - Math.sin((x - x0) / per * Math.PI * 2) * amp * Math.sin(Math.PI * (x - x0) / (x1 - x0))]); return o; }
+function circle(cx, cy, r, a0, a1, n = 120) { const o = []; for (let i = 0; i <= n; i++) { const a = lerp(a0, a1, i / n); o.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } return o; }
+const CIR = { x: 4900, y: 550, r: 330 };
+const SEGS = [
+  { t0: .7, t1: 3.0, pts: [[0, B], [700, B]] },
+  { t0: 3.0, t1: 5.7, pts: [[700, B], [820, B], [1000, B - 330], [1090, B - 230], [1230, B - 460], [1330, B - 300], [1400, B - 370], [1570, B], [1750, B]] },
+  { t0: 6.0, t1: 8.7, pts: [...waves(1750, 2130), ...circle(2250, B, 120, Math.PI, Math.PI * 2, 60), ...waves(2370, 2750)] },
+  { t0: 9.0, t1: 11.8, pts: [[2750, B], [3060, B], ...cubic([3060, B], [3150, B - 150], [3215, B - 380], [3250, B - 620]), ...cubic([3250, B - 620], [3285, B - 380], [3350, B - 150], [3440, B]), [3390, B], ...quad([3390, B], [3250, B - 300], [3110, B]), [3750, B]] },
+  { t0: 12.0, t1: 14.5, pts: [[3750, B], [3960, B], [3960, B - 200], [4100, B - 330], [4170, B - 265], [4170, B - 325], [4205, B - 325], [4205, B - 230], [4240, B - 200], [4240, B], [4135, B], [4135, B - 105], [4065, B - 105], [4065, B], [4240, B], [4400, B]] },
+  { t0: 14.5, t1: 17.0, pts: [...cubic([4400, B], [4650, B], [4700, CIR.y + CIR.r], [CIR.x, CIR.y + CIR.r]), ...circle(CIR.x, CIR.y, CIR.r, Math.PI / 2, Math.PI / 2 - Math.PI * 2, 180)] },
+];
+// resample every ~5px with a gentle hand wobble, store cumulative lengths
+SEGS.forEach((s, si) => {
+  const out = [], r = rng(si + 3);
+  for (let i = 0; i < s.pts.length - 1; i++) {
+    const [ax, ay] = s.pts[i], [bx, by] = s.pts[i + 1], d = Math.hypot(bx - ax, by - ay), n = Math.max(1, Math.round(d / 5));
+    for (let k = 0; k < n; k++) out.push([lerp(ax, bx, k / n), lerp(ay, by, k / n)]);
+  }
+  out.push(s.pts[s.pts.length - 1]);
+  const ph = r() * 10, wob = si === 5 ? .6 : 1.6;
+  s.p = out.map(([x, y], i) => [x + Math.sin(i * .21 + ph) * wob * .6, y + Math.sin(i * .13 + ph * 2) * wob + Math.sin(i * .57) * .5]);
+  s.len = [0]; for (let i = 1; i < s.p.length; i++) s.len.push(s.len[i - 1] + Math.hypot(s.p[i][0] - s.p[i - 1][0], s.p[i][1] - s.p[i - 1][1]));
+  s.total = s.len[s.len.length - 1];
+});
+const TOTAL_LEN = SEGS.reduce((a, s) => a + s.total, 0);
+
+// returns {drawnLen, tip:[x,y], ang}
+function strokeLine(t, cam) {
+  let drawn = 0, tip = [0, B], ang = 0;
+  ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = C.line; ctx.lineWidth = 7;
+  ctx.beginPath();
+  for (const s of SEGS) {
+    if (t < s.t0) break;
+    const k = eSine(prog(t, s.t0, s.t1)), target = k * s.total;
+    ctx.moveTo(...cam(s.p[0]));
+    let i = 1;
+    for (; i < s.p.length && s.len[i] <= target; i++) ctx.lineTo(...cam(s.p[i]));
+    if (i < s.p.length) {
+      const f = (target - s.len[i - 1]) / (s.len[i] - s.len[i - 1] || 1), a = s.p[i - 1], b = s.p[i];
+      tip = [lerp(a[0], b[0], f), lerp(a[1], b[1], f)]; ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+      ctx.lineTo(...cam(tip));
+    } else { tip = s.p[s.p.length - 1]; const a = s.p[s.p.length - 2]; ang = Math.atan2(tip[1] - a[1], tip[0] - a[0]); }
+    drawn += target;
+  }
+  ctx.stroke(); ctx.restore();
+  return { drawn, tip, ang };
+}
+
+// ---------- camera (world point shown at screen 540,1000) ----------
+const CAM = [[0, 0, 1000], [.7, 0, 1000], [3.0, 350, 1000], [4.0, 1225, 1000], [6.0, 1225, 1000], [7.0, 2250, 1000], [9.0, 2250, 1000], [10.0, 3250, 1000], [12.0, 3250, 1000], [13.0, 4100, 1000], [14.6, 4160, 1000], [16.4, CIR.x, 730]];
+function camAt(t) {
+  if (t <= CAM[0][0]) return CAM[0];
+  for (let i = 0; i < CAM.length - 1; i++) { const [ta, xa, ya] = CAM[i], [tb, xb, yb] = CAM[i + 1]; if (t <= tb) { const k = eInOut(prog(t, ta, tb)); return [t, lerp(xa, xb, k), lerp(ya, yb, k)]; } }
+  return CAM[CAM.length - 1];
+}
+
+// ---------- typography ----------
+const SANS = (sz, w = 500) => `${w} ${sz}px Montserrat`;
+const SERIF = sz => `italic 400 ${sz}px "Instrument Serif"`;
+// parts: [[text, 'sans'|'serif'], ...] -> words fade in with a soft blur, one after another
+function richLine(parts, cx, y, t, t0, tOut, sz = 74, color = C.ink, accent = C.line) {
+  const words = [];
+  for (const [str, kind] of parts) for (const w of str.split(/(?<= )/)) if (w) words.push([w, kind]);
+  const font = k => k === 'serif' ? SERIF(sz * 1.42) : SANS(sz);
+  let total = 0; for (const [w, k] of words) { ctx.font = font(k); total += ctx.measureText(w).width; }
+  let x = cx - total / 2;
+  const outK = tOut ? eInOut(prog(t, tOut, tOut + .35)) : 0;
+  words.forEach(([w, k], i) => {
+    ctx.font = font(k); const ww = ctx.measureText(w).width;
+    const a = eOut(prog(t, t0 + i * .09, t0 + i * .09 + .55)) * (1 - outK);
+    if (a > 0.001) {
+      ctx.save(); ctx.globalAlpha = a; ctx.filter = `blur(${(1 - a) * 10}px)`;
+      ctx.fillStyle = k === 'serif' ? accent : color; ctx.textBaseline = 'alphabetic';
+      ctx.fillText(w, x, y + (1 - a) * 18 - outK * 20);
+      ctx.restore();
+    }
+    x += ww;
+  });
+}
+const TEXT = [
+  { t0: .35, out: 2.7, lines: [[['toda viagem começa', 'sans']], [['com um ', 'sans'], ['risco.', 'serif']]] },
+  { t0: 3.2, out: 5.7, lines: [[['o de sair', 'sans']], [['do ', 'sans'], ['lugar,', 'serif']]] },
+  { t0: 6.2, out: 8.7, lines: [[['o de trocar a rotina', 'sans']], [['por ', 'sans'], ['maré,', 'serif']]] },
+  { t0: 9.2, out: 11.7, lines: [[['o de ver de perto o que', 'sans']], [['só via em ', 'sans'], ['foto,', 'serif']]] },
+  { t0: 12.2, out: 14.5, lines: [[['e voltar pra casa', 'sans']], [['diferente.', 'serif']]] },
+];
+const LABELS = [
+  [1225, 5.4, 'bariloche, ar', '41.13°s 71.30°o'],
+  [2250, 8.4, 'maragogi, al', '9.01°s 35.22°o'],
+  [3250, 11.5, 'paris, fr', '48.85°n 2.29°l'],
+  [4100, 14.2, 'casa', 'de volta, mas não igual'],
+];
+
+// ---------- paper grain ----------
+const GRAIN = [0, 1, 2, 3].map(i => {
+  const c = document.createElement('canvas'); c.width = 360; c.height = 640; const g = c.getContext('2d'), d = g.createImageData(360, 640), r = rng(i + 40);
+  for (let p = 0; p < d.data.length; p += 4) { const v = r() * 255; d.data[p] = d.data[p + 1] = d.data[p + 2] = v; d.data[p + 3] = 255; }
+  g.putImageData(d, 0, 0); return c;
+});
+
+const logo = new Image(); logo.src = 'assets/logo.png';
+const LOGO_R = 548;
+
+function plane(x, y, size, ang, color) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang); ctx.scale(size / 100, size / 100); ctx.fillStyle = color; ctx.beginPath();
+  ctx.moveTo(50, 0); ctx.bezierCurveTo(50, -6, 42, -7, 34, -7); ctx.lineTo(8, -7); ctx.lineTo(-12, -46); ctx.lineTo(-22, -46); ctx.lineTo(-8, -7);
+  ctx.lineTo(-34, -7); ctx.lineTo(-44, -22); ctx.lineTo(-51, -22); ctx.lineTo(-45, 0); ctx.lineTo(-51, 22); ctx.lineTo(-44, 22); ctx.lineTo(-34, 7);
+  ctx.lineTo(-8, 7); ctx.lineTo(-22, 46); ctx.lineTo(-12, 46); ctx.lineTo(8, 7); ctx.lineTo(34, 7); ctx.bezierCurveTo(42, 7, 50, 6, 50, 0); ctx.closePath(); ctx.fill(); ctx.restore();
+}
+
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.filter = 'none';
+  ctx.fillStyle = C.paper; ctx.fillRect(0, 0, W, H);
+  const [, cx, cy] = camAt(t);
+  const cam = ([x, y]) => [540 + x - cx, 1000 + y - cy];
+
+  // faint ruled guide under the journey (like a notebook baseline)
+  ctx.save(); ctx.strokeStyle = 'rgba(11,42,107,.07)'; ctx.lineWidth = 2; ctx.setLineDash([4, 14]);
+  const by = cam([0, B])[1] + 36; ctx.beginPath(); ctx.moveTo(0, by); ctx.lineTo(W, by); ctx.stroke(); ctx.restore();
+
+  // location labels
+  ctx.save(); ctx.textAlign = 'center';
+  for (const [wx, ta, a, b] of LABELS) {
+    const k = eOut(prog(t, ta, ta + .5)); if (k <= 0) continue;
+    const [sx, sy] = cam([wx, B]); if (sx < -300 || sx > W + 300) continue;
+    ctx.globalAlpha = k; ctx.strokeStyle = C.gray; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx, sy + 30); ctx.lineTo(sx, sy + 30 + 34 * k); ctx.stroke();
+    ctx.fillStyle = C.ink; ctx.font = '700 28px "Space Mono"'; ctx.fillText(a, sx, sy + 110);
+    ctx.fillStyle = C.gray; ctx.font = '700 22px "Space Mono"'; ctx.fillText(b, sx, sy + 146);
+  }
+  ctx.restore();
+
+  // sun rays, sketched once the sunset is complete
+  const rk = prog(t, 7.4, 8.0);
+  if (rk > 0 && t < 10.5) {
+    const [sx, sy] = cam([2250, B]);
+    ctx.save(); ctx.strokeStyle = C.line; ctx.lineWidth = 6; ctx.lineCap = 'round';
+    [-2.6, -2.1, -1.5708, -1.04, -.54].forEach((a, i) => {
+      const k = eOut(clamp(rk * 2.2 - i * .28)); if (k <= 0) return;
+      ctx.beginPath(); ctx.moveTo(sx + Math.cos(a) * 155, sy + Math.sin(a) * 155); ctx.lineTo(sx + Math.cos(a) * (155 + 45 * k), sy + Math.sin(a) * (155 + 45 * k)); ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // logo inside the closed circle
+  const lk = eOut(prog(t, 16.75, 17.7));
+  if (lk > 0) {
+    const [sx, sy] = cam([CIR.x, CIR.y]), R = CIR.r, s = lerp(.94, 1, lk);
+    ctx.save(); ctx.globalAlpha = lk; ctx.translate(sx, sy); ctx.scale(s, s);
+    ctx.beginPath(); ctx.arc(0, 0, R, 0, 7); ctx.clip();
+    const sc = R / LOGO_R; ctx.drawImage(logo, -627 * sc, -627 * sc, 1254 * sc, 1254 * sc); ctx.restore();
+  }
+
+  // the line
+  ctx.save(); ctx.globalAlpha = 1 - eInOut(prog(t, 17.6, 18.4));
+  const { drawn, tip, ang } = strokeLine(t, cam);
+  ctx.restore();
+  const drawing = SEGS.some(s => t > s.t0 && t < s.t1);
+  const [tx, ty] = t < .7 ? cam([0, B]) : cam(tip);
+  if (t < 14.9) { // pen tip
+    const pulse = drawing ? 1 : 1 + .25 * Math.sin(t * 6);
+    ctx.save(); ctx.fillStyle = 'rgba(34,199,230,.25)'; ctx.beginPath(); ctx.arc(tx, ty, 22 * pulse * clamp(t * 3), 0, 7); ctx.fill();
+    ctx.fillStyle = C.line; ctx.beginPath(); ctx.arc(tx, ty, 9 * clamp(t * 4), 0, 7); ctx.fill(); ctx.restore();
+  }
+  // on the final flight the pen becomes a plane, then takes off
+  const pk = prog(t, 14.9, 15.2), off = prog(t, 17.0, 17.9);
+  if (pk > 0 && off < 1) {
+    let px = tx, py = ty, pa = ang;
+    if (off > 0) { const e = off * off; px += Math.cos(ang - .5) * e * 900; py += Math.sin(ang - .5) * e * 900; pa = ang - .5 * eOut(off); }
+    plane(px, py, 70 * pk, pa, C.line);
+  }
+
+  // copy
+  TEXT.forEach(g => { if (t > g.t0 - .1 && t < g.out + .5) g.lines.forEach((ln, i) => richLine(ln, W / 2, 400 + i * 118, t, g.t0 + i * .35, g.out)); });
+  if (t > 17.5) {
+    richLine([['você escolhe o ', 'sans'], ['destino.', 'serif']], W / 2, 260, t, 17.6, null, 54);
+    richLine([['a gente traça o ', 'sans'], ['caminho.', 'serif']], W / 2, 350, t, 18.3, null, 54);
+  }
+  if (t > 19.4) {
+    const k = eOut(prog(t, 19.5, 20.2));
+    ctx.save(); ctx.globalAlpha = k; ctx.textAlign = 'center'; ctx.fillStyle = C.gray; ctx.font = '700 26px "Space Mono"'; ctx.letterSpacing = '4px';
+    ctx.fillText('passagens · hotéis · pacotes', W / 2, 1245 + (1 - k) * 14); ctx.letterSpacing = '0px';
+    ctx.fillStyle = C.ink; ctx.font = SANS(52, 700); ctx.fillText('@grgviagens', W / 2, 1325 + (1 - k) * 14); ctx.restore();
+    richLine([['e o seu próximo ', 'sans'], ['risco?', 'serif']], W / 2, 1450, t, 20.6, null, 46);
+    const k2 = eOut(prog(t, 21.4, 21.9));
+    ctx.save(); ctx.globalAlpha = k2; ctx.textAlign = 'center'; ctx.fillStyle = C.gray; ctx.font = '700 24px "Space Mono"';
+    ctx.fillText('me conta nos comentários ↓', W / 2, 1515 + Math.sin(t * 4) * 4); ctx.restore();
+  }
+
+  // notebook header
+  const hk = 1 - prog(t, 15.5, 16.2);
+  if (hk > 0) {
+    ctx.save(); ctx.globalAlpha = hk * clamp(t * 2); ctx.font = '700 24px "Space Mono"'; ctx.fillStyle = C.gray;
+    ctx.textAlign = 'left'; ctx.fillText('diário de bordo · nº 02', 70, 130);
+    ctx.textAlign = 'right'; ctx.fillText('km ' + String(Math.round(drawn * 1.9)).padStart(5, '0'), W - 70, 130);
+    ctx.restore();
+  }
+
+  // paper grain + soft vignette
+  ctx.save(); ctx.globalAlpha = .06; ctx.globalCompositeOperation = 'multiply';
+  ctx.drawImage(GRAIN[Math.floor(t * 12) % 4], 0, 0, W, H); ctx.restore();
+  const v = ctx.createRadialGradient(W / 2, H / 2, H * .35, W / 2, H / 2, H * .8);
+  v.addColorStop(0, 'rgba(90,70,40,0)'); v.addColorStop(1, 'rgba(90,70,40,.12)'); ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+  // loop fade back to the empty page
+  const fo = prog(t, 23.3, 24); if (fo > 0) { ctx.fillStyle = `rgba(246,243,236,${fo})`; ctx.fillRect(0, 0, W, H); }
+}
+
+window.renderFrame = i => render(i / FPS);
+window.META = { W, H, FPS, DUR };
+window.ready = Promise.all([
+  document.fonts.load(SANS(74)), document.fonts.load(SANS(52, 700)), document.fonts.load(SERIF(100)),
+  document.fonts.load('700 24px "Space Mono"'), logo.decode(),
+]).then(() => { render(0); return true; });
+
+if (!CAPTURE) window.ready.then(() => {
+  const audio = new Audio('assets/music.wav'); let start = null;
+  cv.addEventListener('click', () => { start = performance.now(); audio.currentTime = 0; audio.play().catch(() => {}); });
+  const loop = now => { if (start === null) start = now; render(((now - start) / 1000) % DUR); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+});
+</script>
+</body>
+</html>
